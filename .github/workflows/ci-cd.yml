@@ -1,0 +1,83 @@
+name: CI-CD for 3-Tier App
+
+on:
+  push:
+    branches:
+      - main # Or your primary branch
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    permissions: # Required for OIDC if you choose that over access keys
+        id-token: write
+        contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          # For enhanced security, consider using IAM Roles for GitHub Actions (OIDC)
+          # role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/YourGitHubActionECRRole
+          # role-session-name: GitHubActionsSession
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Web Tier image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY_WEB: ${{ secrets.PROJECT_NAME }}-web-tier # Matches Terraform ECR name
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_WEB:$IMAGE_TAG ./web-tier
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_WEB:$IMAGE_TAG
+        # You'll need to create a secret PROJECT_NAME in GitHub secrets, or hardcode it, or fetch from Terraform output.
+        # For simplicity, add PROJECT_NAME secret with value like 'three-tier-demo'
+
+      - name: Build, tag, and push App Tier image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY_APP: ${{ secrets.PROJECT_NAME }}-app-tier # Matches Terraform ECR name
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_APP:$IMAGE_TAG ./app-tier
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_APP:$IMAGE_TAG
+
+  # DEPLOYMENT STEP - Simplified for "by midnight"
+  # This current CI/CD only pushes to ECR.
+  # For actual deployment, you would trigger an update to your ASG or ECS service.
+  # Simplest (but not ideal) way to update ASG instances is to trigger a "instance refresh"
+  # or have a mechanism (like AWS Systems Manager Run Command or CodeDeploy) to update running instances.
+
+  # Example: Trigger an ASG Instance Refresh (requires appropriate IAM permissions for GitHub Actions role)
+  # deploy-web:
+  #   needs: build-and-push
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v4
+  #       # ... same as above
+  #     - name: Start Instance Refresh for Web ASG
+  #       run: |
+  #         aws autoscaling start-instance-refresh --auto-scaling-group-name ${{ secrets.PROJECT_NAME }}-web-asg --region ${{ secrets.AWS_REGION }} --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
+  #         echo "Web ASG instance refresh initiated."
+  #
+  # deploy-app:
+  #   needs: build-and-push
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v4
+  #       # ... same as above
+  #     - name: Start Instance Refresh for App ASG
+  #       run: |
+  #         aws autoscaling start-instance-refresh --auto-scaling-group-name ${{ secrets.PROJECT_NAME }}-app-asg --region ${{ secrets.AWS_REGION }} --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
+  #         echo "App ASG instance refresh initiated."
