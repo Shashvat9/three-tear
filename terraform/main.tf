@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -307,6 +311,99 @@ resource "aws_ecr_repository" "app_tier_repo" {
   tags = { Name = "${var.project_name}-app-tier-ecr" }
 }
 
+# --- S3 Storage Bucket (Google Drive Clone Storage Service) ---
+resource "aws_s3_bucket" "storage_bucket" {
+  bucket = "${var.project_name}-storage-${random_string.bucket_suffix.result}"
+
+  tags = {
+    Name        = "${var.project_name}-storage-bucket"
+    Purpose     = "Google Drive Clone File Storage"
+    Environment = var.environment
+  }
+}
+
+# Random suffix to ensure bucket name uniqueness
+resource "random_string" "bucket_suffix" {
+  length  = 8
+  special = false
+  upper   = false
+}
+
+# Enable versioning for the storage bucket (important for file recovery)
+resource "aws_s3_bucket_versioning" "storage_versioning" {
+  bucket = aws_s3_bucket.storage_bucket.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Enable server-side encryption for security
+resource "aws_s3_bucket_server_side_encryption_configuration" "storage_encryption" {
+  bucket = aws_s3_bucket.storage_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Block public access to the storage bucket
+resource "aws_s3_bucket_public_access_block" "storage_public_access" {
+  bucket = aws_s3_bucket.storage_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Lifecycle policy for cost optimization (move old versions to cheaper storage)
+resource "aws_s3_bucket_lifecycle_configuration" "storage_lifecycle" {
+  bucket = aws_s3_bucket.storage_bucket.id
+
+  rule {
+    id     = "move-old-versions-to-glacier"
+    status = "Enabled"
+
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "STANDARD_IA"
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = 90
+      storage_class   = "GLACIER"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 365
+    }
+  }
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+# CORS configuration for web uploads
+resource "aws_s3_bucket_cors_configuration" "storage_cors" {
+  bucket = aws_s3_bucket.storage_bucket.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "PUT", "POST", "DELETE", "HEAD"]
+    allowed_origins = ["*"] # In production, restrict to your domain
+    expose_headers  = ["ETag", "Content-Length", "Content-Type"]
+    max_age_seconds = 3000
+  }
+}
+
 # --- IAM Role for EC2 Instances ---
 resource "aws_iam_role" "ec2_instance_role" {
   name = "${var.project_name}-ec2-role"
@@ -329,6 +426,39 @@ resource "aws_iam_role_policy_attachment" "ec2_ecr_readonly" {
 resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
   role       = aws_iam_role.ec2_instance_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# S3 access policy for App Tier to interact with the storage bucket
+resource "aws_iam_policy" "s3_storage_policy" {
+  name        = "${var.project_name}-s3-storage-policy"
+  description = "Policy for App Tier to access S3 storage bucket for Google Drive clone"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GetObjectVersion",
+          "s3:DeleteObjectVersion"
+        ]
+        Resource = [
+          aws_s3_bucket.storage_bucket.arn,
+          "${aws_s3_bucket.storage_bucket.arn}/*"
+        ]
+      }
+    ]
+  })
+  tags = { Name = "${var.project_name}-s3-storage-policy" }
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_s3_storage" {
+  role       = aws_iam_role.ec2_instance_role.name
+  policy_arn = aws_iam_policy.s3_storage_policy.arn
 }
 
 resource "aws_iam_instance_profile" "ec2_profile" {
@@ -405,7 +535,13 @@ resource "aws_launch_template" "web_lt" {
               usermod -a -G docker ec2-user
               aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.${var.aws_region}.amazonaws.com
               docker pull ${aws_ecr_repository.web_tier_repo.repository_url}:latest
-              docker run -d -p 3000:3000 ${aws_ecr_repository.web_tier_repo.repository_url}:latest # Ensure instance port matches target group port
+              # Run web tier with app tier URL for API calls
+              # NOTE: In this cost-optimized setup without an App ALB, you'll need to configure
+              # APP_TIER_URL with the private IP of an app tier instance, or add an internal ALB
+              # For local development/testing, use http://localhost:5000
+              docker run -d -p 3000:3000 \
+                -e APP_TIER_URL=${var.app_tier_url} \
+                ${aws_ecr_repository.web_tier_repo.repository_url}:latest
               EOF
   )
   # key_name = "your-key-pair-name"
@@ -462,7 +598,15 @@ resource "aws_launch_template" "app_lt" {
               aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.${var.aws_region}.amazonaws.com
               # The following line will fail if the above ECR login fails or image cannot be pulled
               docker pull ${aws_ecr_repository.app_tier_repo.repository_url}:latest
-              docker run -d -p 5000:5000 ${aws_ecr_repository.app_tier_repo.repository_url}:latest
+              # Run the app tier with S3 bucket and DB configuration
+              docker run -d -p 5000:5000 \
+                -e S3_BUCKET_NAME=${aws_s3_bucket.storage_bucket.bucket} \
+                -e AWS_REGION=${var.aws_region} \
+                -e DB_HOST=${try(aws_db_instance.default[0].address, "localhost")} \
+                -e DB_NAME=${var.db_name} \
+                -e DB_USERNAME=${var.db_username} \
+                -e DB_PASSWORD=${var.db_password} \
+                ${aws_ecr_repository.app_tier_repo.repository_url}:latest
               EOF
   )
   # key_name = "your-key-pair-name"
@@ -470,7 +614,7 @@ resource "aws_launch_template" "app_lt" {
     resource_type = "instance"
     tags          = { Name = "${var.project_name}-app-instance" }
   }
-  depends_on = [aws_iam_instance_profile.ec2_profile, aws_ecr_repository.app_tier_repo]
+  depends_on = [aws_iam_instance_profile.ec2_profile, aws_ecr_repository.app_tier_repo, aws_s3_bucket.storage_bucket]
 }
 
 resource "aws_autoscaling_group" "app_asg" {

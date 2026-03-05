@@ -7,8 +7,8 @@ WORKDIR /usr/src/app
 # Copy package.json and package-lock.json (if available)
 COPY package*.json ./
 
-# Install application dependencies
-RUN npm install express
+# Install application dependencies from package.json
+RUN npm install
 
 # Bundle app source
 COPY . .
