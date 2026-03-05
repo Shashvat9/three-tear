@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # Install application dependencies
-RUN npm install express
+RUN npm install express axios multer form-data
 
 # Bundle app source
 COPY . .

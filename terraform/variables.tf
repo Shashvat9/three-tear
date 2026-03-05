@@ -10,6 +10,12 @@ variable "project_name" {
   default     = "three-tier"
 }
 
+variable "environment" {
+  description = "Environment name (e.g., dev, staging, prod)"
+  type        = string
+  default     = "dev"
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for the VPC"
   type        = string
@@ -52,6 +58,12 @@ variable "db_subnet_az2_cidr" {
   default     = "10.0.6.0/24"
 }
 
+variable "db_name" {
+  description = "Name of the RDS database"
+  type        = string
+  default     = "drivedb"
+}
+
 variable "db_username" {
   description = "Username for the RDS database"
   type        = string
@@ -64,4 +76,10 @@ variable "db_password" {
   type        = string
   default     = "Admin@3Tear" # CHANGE THIS!
   sensitive   = true
+}
+
+variable "enable_rds" {
+  description = "Enable RDS database creation (set to true when ready)"
+  type        = bool
+  default     = false
 }
