@@ -105,6 +105,10 @@ output "app_tier_user_data_example" {
               docker run -d -p 5000:5000 \
                 -e S3_BUCKET_NAME=${aws_s3_bucket.storage_bucket.bucket} \
                 -e AWS_REGION=${var.aws_region} \
+                -e DB_HOST=${try(aws_db_instance.default[0].address, "localhost")} \
+                -e DB_NAME=${var.db_name} \
+                -e DB_USERNAME=${var.db_username} \
+                -e DB_PASSWORD=${var.db_password} \
                 ${aws_ecr_repository.app_tier_repo.repository_url}:latest
               EOF
   )

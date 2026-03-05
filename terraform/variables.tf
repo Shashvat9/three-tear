@@ -83,3 +83,9 @@ variable "enable_rds" {
   type        = bool
   default     = false
 }
+
+variable "app_tier_url" {
+  description = "URL of the App Tier API endpoint. For production, use an internal ALB DNS or private IP."
+  type        = string
+  default     = "http://localhost:5000"
+}

@@ -569,12 +569,14 @@ app.get('/', (req, res) => {
                 
                 if (data.success) {
                     const usedMB = data.stats.total_size_mb;
-                    const maxGB = 15; // Simulated max storage
-                    const usedPercent = Math.min((usedMB / (maxGB * 1024)) * 100, 100);
+                    // Display limit - S3 has no inherent limit, this is for UI display only
+                    // Configure actual limits via S3 bucket policies or application logic
+                    const displayMaxGB = 15;
+                    const usedPercent = Math.min((usedMB / (displayMaxGB * 1024)) * 100, 100);
                     
                     document.getElementById('storageBar').style.width = usedPercent + '%';
                     document.getElementById('storageText').textContent = 
-                        usedMB.toFixed(2) + ' MB of ' + maxGB + ' GB used';
+                        usedMB.toFixed(2) + ' MB of ' + displayMaxGB + ' GB used';
                 }
             } catch (error) {
                 document.getElementById('storageText').textContent = 'Unable to load storage info';

@@ -536,8 +536,11 @@ resource "aws_launch_template" "web_lt" {
               aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.${var.aws_region}.amazonaws.com
               docker pull ${aws_ecr_repository.web_tier_repo.repository_url}:latest
               # Run web tier with app tier URL for API calls
+              # NOTE: In this cost-optimized setup without an App ALB, you'll need to configure
+              # APP_TIER_URL with the private IP of an app tier instance, or add an internal ALB
+              # For local development/testing, use http://localhost:5000
               docker run -d -p 3000:3000 \
-                -e APP_TIER_URL=http://${aws_lb.web_alb.dns_name}:5000 \
+                -e APP_TIER_URL=${var.app_tier_url} \
                 ${aws_ecr_repository.web_tier_repo.repository_url}:latest
               EOF
   )
